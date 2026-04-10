@@ -21,7 +21,7 @@ Important:
 ## Planned Flow
 
 1. Open the app.
-2. Enter the chat capture region (`x`, `y`, `width`, `height`).
+2. Use `Pick Region` and drag over the chat capture area.
 3. Start scanning.
 4. The app reads visible chat text from that region.
 5. The app shows the OCR result and a translated version.
@@ -36,6 +36,12 @@ The app supports two modes:
 - `libretranslate`
   - sends text to a LibreTranslate-compatible endpoint
   - supports `X-API-Key` header authentication
+
+Optional config:
+
+- `tesseract_cmd`
+  - full path to `tesseract.exe`
+  - useful if Tesseract is not in `PATH` or lives on another drive
 
 For the first MVP, `echo` is the safest default.
 
@@ -117,7 +123,17 @@ python -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-### 7. Start the app
+### 7. Optional: point to a custom Tesseract path
+
+If `tesseract.exe` is not in `PATH`, set `tesseract_cmd` in `config.json`:
+
+```json
+{
+  "tesseract_cmd": "E:\\path\\to\\tesseract.exe"
+}
+```
+
+### 8. Start the app
 
 Either double-click:
 
@@ -151,11 +167,7 @@ X-API-Key: <your key>
 2. Open `uvchat`.
 3. Leave the translation mode on `echo`.
 4. Put the Utherverse chat window clearly on screen.
-5. Enter the chat region:
-   - `x`
-   - `y`
-   - `width`
-   - `height`
+5. Press `Pick Region` and drag a rectangle over the visible chat area.
 6. Press `Start`.
 7. Check whether the visible chat text appears in the `Original OCR` pane.
 
@@ -171,10 +183,10 @@ If OCR is still weak:
 For the first test, the easiest way is:
 
 - open `uvchat`
-- guess a small region around the visible chat
-- adjust the values until OCR starts reading text
+- click `Pick Region`
+- drag a box around the visible chat area
 
-If you want, the next improvement can be a simple Windows region-picker overlay so you do not have to enter coordinates manually.
+The app now includes a built-in region picker, so you do not need to enter coordinates manually.
 
 ## Notes
 

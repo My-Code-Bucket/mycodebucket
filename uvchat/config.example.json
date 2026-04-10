@@ -5,18 +5,23 @@
     "width": 600,
     "height": 300
   },
+  "capture_backend": "auto",
   "poll_interval_ms": 1500,
   "ocr_lang": "eng",
+  "ocr_profile": "uvchat",
+  "tesseract_cmd": "",
+  "ocr_psm": 6,
   "source_language": "auto",
   "target_language": "de",
   "translation": {
     "mode": "echo",
-    "libretranslate_url": "https://translate.bigslut.duckdns.org/translate",
+    "libretranslate_url": "http://127.0.0.1:5000/translate",
+    "google_api_key": "",
     "api_key": ""
   },
   "window": {
-    "always_on_top": true,
-    "width": 920,
-    "height": 760
+    "always_on_top": false,
+    "width": 520,
+    "height": 860
   }
 }
