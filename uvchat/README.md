@@ -35,6 +35,7 @@ The app supports two modes:
   - the translated pane mirrors OCR text
 - `libretranslate`
   - sends text to a LibreTranslate-compatible endpoint
+  - supports `X-API-Key` header authentication
 
 For the first MVP, `echo` is the safest default.
 
@@ -126,6 +127,22 @@ or start manually:
 
 ```bat
 .venv\Scripts\python.exe app.py
+```
+
+## LibreTranslate Endpoint
+
+If you want to use your protected server endpoint, set:
+
+- `Mode`: `libretranslate`
+- `LibreTranslate URL`:
+  - `https://translate.bigslut.duckdns.org/translate`
+- `API Key`:
+  - your `X-API-Key` token
+
+The app sends the key as:
+
+```text
+X-API-Key: <your key>
 ```
 
 ## First Windows Test

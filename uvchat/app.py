@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 import json
-import os
 import shutil
-import subprocess
 import threading
 import tkinter as tk
 from pathlib import Path
@@ -95,6 +93,7 @@ class UvChatApp:
         self.topmost_var = tk.BooleanVar()
         self.translation_mode_var = tk.StringVar()
         self.libre_url_var = tk.StringVar()
+        self.libre_api_key_var = tk.StringVar()
 
         fields = [
             ("X", self.x_var),
@@ -129,12 +128,17 @@ class UvChatApp:
             row=3, column=2, columnspan=4, sticky="ew", padx=4
         )
 
+        ttk.Label(top, text="API Key").grid(row=2, column=6, sticky="w", padx=4)
+        ttk.Entry(top, textvariable=self.libre_api_key_var, show="*").grid(
+            row=3, column=6, sticky="ew", padx=4
+        )
+
         ttk.Checkbutton(
             top,
             text="Always On Top",
             variable=self.topmost_var,
             command=self._toggle_topmost,
-        ).grid(row=3, column=6, sticky="w", padx=4)
+        ).grid(row=2, column=7, sticky="w", padx=4)
 
         buttons = ttk.Frame(top)
         buttons.grid(row=3, column=7, columnspan=2, sticky="e", padx=4)
@@ -196,6 +200,7 @@ class UvChatApp:
         self.topmost_var.set(self.config["window"]["always_on_top"])
         self.translation_mode_var.set(self.config["translation"]["mode"])
         self.libre_url_var.set(self.config["translation"]["libretranslate_url"])
+        self.libre_api_key_var.set(self.config["translation"].get("api_key", ""))
 
     def _read_ui_into_config(self):
         self.config["capture"] = {
@@ -210,6 +215,7 @@ class UvChatApp:
         self.config["target_language"] = self.target_lang_var.get().strip() or "de"
         self.config["translation"]["mode"] = self.translation_mode_var.get().strip() or "echo"
         self.config["translation"]["libretranslate_url"] = self.libre_url_var.get().strip()
+        self.config["translation"]["api_key"] = self.libre_api_key_var.get().strip()
         self.config["window"]["always_on_top"] = bool(self.topmost_var.get())
 
     def save_current_config(self):
@@ -318,13 +324,15 @@ class UvChatApp:
                 "target": self.config["target_language"],
                 "format": "text",
             }
-            api_key = self.config["translation"].get("api_key")
+            api_key = self.config["translation"].get("api_key", "").strip()
+            headers = {}
             if api_key:
-                payload["api_key"] = api_key
+                headers["X-API-Key"] = api_key
 
             response = requests.post(
                 self.config["translation"]["libretranslate_url"],
                 json=payload,
+                headers=headers,
                 timeout=20,
             )
             response.raise_for_status()
