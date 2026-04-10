@@ -9,6 +9,10 @@ Each tool lives in its own subfolder.
 - [uvchat](/home/ubuntu/uvchat/uvchat)
   - desktop helper for Utherverse chat OCR and translation
 
+See also:
+
+- [TOOLS.md](/home/ubuntu/uvchat/TOOLS.md)
+
 ## Structure
 
 - keep each tool isolated in its own folder
