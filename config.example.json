@@ -1,0 +1,22 @@
+{
+  "capture": {
+    "x": 0,
+    "y": 0,
+    "width": 600,
+    "height": 300
+  },
+  "poll_interval_ms": 1500,
+  "ocr_lang": "eng",
+  "source_language": "auto",
+  "target_language": "de",
+  "translation": {
+    "mode": "echo",
+    "libretranslate_url": "http://127.0.0.1:5000/translate",
+    "api_key": ""
+  },
+  "window": {
+    "always_on_top": true,
+    "width": 920,
+    "height": 760
+  }
+}
