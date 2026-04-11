@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 import json
 import os
 import re
@@ -6,6 +6,7 @@ import shutil
 import threading
 import tkinter as tk
 import ctypes
+import ctypes.wintypes as wintypes
 from datetime import datetime
 from pathlib import Path
 from tkinter import ttk
@@ -20,10 +21,15 @@ WINDOWS_TESSERACT_PATHS = [
     Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
     Path(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"),
 ]
+DEFAULT_SCREEN_WIDTH = 1920
+DEFAULT_SCREEN_HEIGHT = 1200
+TABS_CAPTURE_HEIGHT = 28
+DEFAULT_WINDOW_TITLE_HINT = "Utherverse 3D Client"
 
 
 DEFAULT_CONFIG = {
     "capture": {"x": 0, "y": 0, "width": 600, "height": 300},
+    "tabs_capture": {"x": 0, "y": 272, "width": 600, "height": 28},
     "capture_backend": "auto",
     "poll_interval_ms": 1500,
     "ocr_lang": "eng",
@@ -36,10 +42,32 @@ DEFAULT_CONFIG = {
         "mode": "echo",
         "libretranslate_url": "http://127.0.0.1:5000/translate",
         "google_api_key": "",
+        "oci_config_file": str(Path.home() / ".oci" / "config"),
+        "oci_profile": "DEFAULT",
+        "oci_compartment_id": "",
         "api_key": "",
+    },
+    "window_tracking": {
+        "enabled": True,
+        "title_hint": DEFAULT_WINDOW_TITLE_HINT,
+        "chat_relative": {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0},
+        "tabs_relative": {"x": 0.0, "y": 0.906667, "width": 1.0, "height": 0.093333},
     },
     "window": {"always_on_top": True, "width": 520, "height": 860},
 }
+
+
+class RECT(ctypes.Structure):
+    _fields_ = [
+        ("left", wintypes.LONG),
+        ("top", wintypes.LONG),
+        ("right", wintypes.LONG),
+        ("bottom", wintypes.LONG),
+    ]
+
+
+class POINT(ctypes.Structure):
+    _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
 
 
 def deep_merge(base, override):
@@ -80,15 +108,20 @@ class UvChatApp:
         self.original_history_lines = []
         self.translated_history_lines = []
         self.seen_chat_lines = set()
+        self.chat_histories = {"LOCAL": {"original": [], "translated": [], "seen": set()}}
+        self.active_tab_name = "LOCAL"
         self.region_picker = None
         self.region_picker_canvas = None
         self.region_picker_start = None
         self.region_picker_rect = None
         self.region_picker_origin = None
+        self.region_picker_target = "capture"
         self.capture_preview_image = None
         self.processed_preview_image = None
+        self.tabs_preview_image = None
         self.last_capture_image = None
         self.last_processed_image = None
+        self.last_tabs_capture_image = None
 
         self.root.title("uvchat")
         self.root.geometry(
@@ -113,6 +146,10 @@ class UvChatApp:
         self.y_var = tk.StringVar()
         self.w_var = tk.StringVar()
         self.h_var = tk.StringVar()
+        self.tabs_x_var = tk.StringVar()
+        self.tabs_y_var = tk.StringVar()
+        self.tabs_w_var = tk.StringVar()
+        self.tabs_h_var = tk.StringVar()
         self.poll_var = tk.StringVar()
         self.ocr_lang_var = tk.StringVar()
         self.source_lang_var = tk.StringVar()
@@ -123,6 +160,11 @@ class UvChatApp:
         self.libre_url_var = tk.StringVar()
         self.libre_api_key_var = tk.StringVar()
         self.google_api_key_var = tk.StringVar()
+        self.oci_config_file_var = tk.StringVar()
+        self.oci_profile_var = tk.StringVar()
+        self.oci_compartment_var = tk.StringVar()
+        self.window_tracking_var = tk.BooleanVar()
+        self.window_title_var = tk.StringVar()
 
         header = ttk.Frame(top)
         header.grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, 8))
@@ -146,10 +188,14 @@ class UvChatApp:
             ("Y", self.y_var, 0, 1),
             ("Width", self.w_var, 0, 2),
             ("Height", self.h_var, 0, 3),
-            ("Poll ms", self.poll_var, 2, 0),
-            ("OCR", self.ocr_lang_var, 2, 1),
-            ("Source", self.source_lang_var, 2, 2),
-            ("Target", self.target_lang_var, 2, 3),
+            ("Tabs X", self.tabs_x_var, 2, 0),
+            ("Tabs Y", self.tabs_y_var, 2, 1),
+            ("Tabs W", self.tabs_w_var, 2, 2),
+            ("Tabs H", self.tabs_h_var, 2, 3),
+            ("Poll ms", self.poll_var, 4, 0),
+            ("OCR", self.ocr_lang_var, 4, 1),
+            ("Source", self.source_lang_var, 4, 2),
+            ("Target", self.target_lang_var, 4, 3),
         ]
 
         for label, variable, row, column in fields:
@@ -160,81 +206,133 @@ class UvChatApp:
                 row=row + 1, column=column, sticky="ew", padx=4, pady=(2, 8)
             )
 
-        ttk.Label(self.controls_frame, text="Mode").grid(row=4, column=0, sticky="w", padx=4)
+        ttk.Label(self.controls_frame, text="Mode").grid(row=6, column=0, sticky="w", padx=4)
         ttk.Combobox(
             self.controls_frame,
             textvariable=self.translation_mode_var,
-            values=["echo", "libretranslate", "google"],
+            values=["echo", "libretranslate", "google", "oci"],
             state="readonly",
             width=12,
-        ).grid(row=5, column=0, sticky="ew", padx=4)
+        ).grid(row=7, column=0, sticky="ew", padx=4)
 
         ttk.Label(self.controls_frame, text="LibreTranslate URL").grid(
-            row=4, column=1, columnspan=2, sticky="w", padx=4
+            row=6, column=1, columnspan=2, sticky="w", padx=4
         )
         ttk.Entry(self.controls_frame, textvariable=self.libre_url_var).grid(
-            row=5, column=1, columnspan=2, sticky="ew", padx=4
+            row=7, column=1, columnspan=2, sticky="ew", padx=4
         )
 
         ttk.Label(self.controls_frame, text="Libre API Key").grid(
-            row=7, column=0, columnspan=2, sticky="w", padx=4, pady=(8, 0)
+            row=9, column=0, columnspan=2, sticky="w", padx=4, pady=(8, 0)
         )
         ttk.Entry(
             self.controls_frame,
             textvariable=self.libre_api_key_var,
             show="*",
-        ).grid(row=8, column=0, columnspan=4, sticky="ew", padx=4, pady=(2, 0))
+        ).grid(row=10, column=0, columnspan=4, sticky="ew", padx=4, pady=(2, 0))
 
         ttk.Label(self.controls_frame, text="Google API Key").grid(
-            row=9, column=0, columnspan=2, sticky="w", padx=4, pady=(8, 0)
+            row=11, column=0, columnspan=2, sticky="w", padx=4, pady=(8, 0)
         )
         ttk.Entry(
             self.controls_frame,
             textvariable=self.google_api_key_var,
             show="*",
-        ).grid(row=10, column=0, columnspan=4, sticky="ew", padx=4, pady=(2, 0))
+        ).grid(row=12, column=0, columnspan=4, sticky="ew", padx=4, pady=(2, 0))
+
+        ttk.Label(self.controls_frame, text="OCI Config").grid(
+            row=13, column=0, sticky="w", padx=4, pady=(8, 0)
+        )
+        ttk.Entry(
+            self.controls_frame,
+            textvariable=self.oci_config_file_var,
+        ).grid(row=14, column=0, columnspan=2, sticky="ew", padx=4, pady=(2, 0))
+
+        ttk.Label(self.controls_frame, text="OCI Profile").grid(
+            row=13, column=2, sticky="w", padx=4, pady=(8, 0)
+        )
+        ttk.Entry(
+            self.controls_frame,
+            textvariable=self.oci_profile_var,
+        ).grid(row=14, column=2, sticky="ew", padx=4, pady=(2, 0))
+
+        ttk.Label(self.controls_frame, text="OCI Compartment OCID").grid(
+            row=15, column=0, columnspan=2, sticky="w", padx=4, pady=(8, 0)
+        )
+        ttk.Entry(
+            self.controls_frame,
+            textvariable=self.oci_compartment_var,
+        ).grid(row=16, column=0, columnspan=4, sticky="ew", padx=4, pady=(2, 0))
 
         ttk.Checkbutton(
             self.controls_frame,
             text="Always On Top",
             variable=self.topmost_var,
             command=self._toggle_topmost,
-        ).grid(row=5, column=3, sticky="w", padx=4)
+        ).grid(row=7, column=3, sticky="w", padx=4)
+
+        ttk.Checkbutton(
+            self.controls_frame,
+            text="Track Utherverse Window",
+            variable=self.window_tracking_var,
+        ).grid(row=17, column=0, columnspan=2, sticky="w", padx=4, pady=(8, 0))
+
+        ttk.Label(self.controls_frame, text="Window Title").grid(
+            row=17, column=2, columnspan=2, sticky="w", padx=4, pady=(8, 0)
+        )
+        ttk.Entry(self.controls_frame, textvariable=self.window_title_var).grid(
+            row=18, column=2, columnspan=2, sticky="ew", padx=4, pady=(2, 0)
+        )
 
         controls = ttk.Frame(self.controls_frame)
-        controls.grid(row=6, column=0, columnspan=4, sticky="ew", padx=4, pady=(10, 0))
+        controls.grid(row=19, column=0, columnspan=4, sticky="ew", padx=4, pady=(10, 0))
         controls.columnconfigure(0, weight=1)
         controls.columnconfigure(1, weight=1)
 
         self.pick_region_button = ttk.Button(
-            controls, text="Pick Region", command=self.pick_region
+            controls, text="Pick Chat Region", command=self.pick_region
         )
         self.pick_region_button.grid(row=0, column=0, sticky="ew", padx=(0, 6), pady=(0, 6))
+
+        self.pick_tabs_region_button = ttk.Button(
+            controls, text="Tabs From Chat", command=self.sync_tabs_capture_from_chat
+        )
+        self.pick_tabs_region_button.grid(row=0, column=1, sticky="ew", pady=(0, 6))
+
+        self.detect_window_button = ttk.Button(
+            controls, text="Detect Window", command=self.detect_window_from_ui
+        )
+        self.detect_window_button.grid(row=1, column=0, sticky="ew", padx=(0, 6))
+
+        self.sync_offsets_button = ttk.Button(
+            controls, text="Use Current As Offsets", command=self.sync_offsets_from_current_region
+        )
+        self.sync_offsets_button.grid(row=1, column=1, sticky="ew")
 
         self.save_button = ttk.Button(
             controls, text="Save Config", command=self.save_current_config
         )
-        self.save_button.grid(row=0, column=1, sticky="ew", pady=(0, 6))
+        self.save_button.grid(row=2, column=0, sticky="ew", padx=(0, 6), pady=(6, 0))
 
         self.debug_capture_button = ttk.Button(
             controls, text="Save Debug Capture", command=self.save_debug_capture
         )
-        self.debug_capture_button.grid(row=1, column=0, sticky="ew", padx=(0, 6))
+        self.debug_capture_button.grid(row=2, column=1, sticky="ew", pady=(6, 0))
 
         self.clear_chat_button = ttk.Button(
             controls, text="Clear Chat", command=self.clear_chat
         )
-        self.clear_chat_button.grid(row=1, column=1, sticky="ew")
+        self.clear_chat_button.grid(row=3, column=0, sticky="ew", padx=(0, 6), pady=(6, 0))
 
         self.start_button = ttk.Button(
             controls, text="Start Scanning", command=self.start_scan
         )
-        self.start_button.grid(row=2, column=0, sticky="ew", padx=(0, 6), pady=(6, 0))
+        self.start_button.grid(row=3, column=1, sticky="ew", pady=(6, 0))
 
         self.stop_button = ttk.Button(
             controls, text="Stop Scanning", command=self.stop_scan
         )
-        self.stop_button.grid(row=2, column=1, sticky="ew", pady=(6, 0))
+        self.stop_button.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         self._sync_controls_visibility()
 
         status_frame = ttk.Frame(self.root, padding=(12, 0, 12, 8))
@@ -244,6 +342,14 @@ class UvChatApp:
         ttk.Label(
             status_frame, textvariable=self.status_var, foreground="#c98200"
         ).grid(row=0, column=0, sticky="w")
+        self.active_tab_var = tk.StringVar(value="Active tab: LOCAL")
+        ttk.Label(
+            status_frame, textvariable=self.active_tab_var, foreground="#4a6fa5"
+        ).grid(row=1, column=0, sticky="w", pady=(2, 0))
+        self.window_info_var = tk.StringVar(value="Window: not detected")
+        ttk.Label(
+            status_frame, textvariable=self.window_info_var, foreground="#6a6a6a"
+        ).grid(row=2, column=0, sticky="w", pady=(2, 0))
 
         panes = ttk.Panedwindow(self.root, orient=tk.VERTICAL)
         panes.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 12))
@@ -270,6 +376,9 @@ class UvChatApp:
         raw_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 6))
         processed_frame = ttk.LabelFrame(preview_images, text="OCR Preview")
         processed_frame.grid(row=1, column=0, sticky="nsew")
+        tabs_frame = ttk.LabelFrame(preview_images, text="Tabs Preview")
+        tabs_frame.grid(row=2, column=0, sticky="nsew", pady=(6, 0))
+        preview_images.rowconfigure(2, weight=1)
 
         self.capture_preview_image_label = ttk.Label(
             raw_frame,
@@ -287,6 +396,14 @@ class UvChatApp:
         )
         self.processed_preview_image_label.pack(fill="both", expand=True, padx=6, pady=6)
 
+        self.tabs_preview_image_label = ttk.Label(
+            tabs_frame,
+            text="No tabs preview yet.",
+            anchor="center",
+            justify="center",
+        )
+        self.tabs_preview_image_label.pack(fill="both", expand=True, padx=6, pady=6)
+
         self.original_text = ScrolledText(
             original_frame, wrap="word", font=("TkDefaultFont", 11)
         )
@@ -302,10 +419,15 @@ class UvChatApp:
 
     def _apply_config_to_ui(self):
         capture = self.config["capture"]
+        tabs_capture = self.config.get("tabs_capture", self._derive_tabs_capture(capture))
         self.x_var.set(str(capture["x"]))
         self.y_var.set(str(capture["y"]))
         self.w_var.set(str(capture["width"]))
         self.h_var.set(str(capture["height"]))
+        self.tabs_x_var.set(str(tabs_capture["x"]))
+        self.tabs_y_var.set(str(tabs_capture["y"]))
+        self.tabs_w_var.set(str(tabs_capture["width"]))
+        self.tabs_h_var.set(str(tabs_capture["height"]))
         self.poll_var.set(str(self.config["poll_interval_ms"]))
         self.ocr_lang_var.set(self.config["ocr_lang"])
         self.source_lang_var.set(self.config["source_language"])
@@ -315,6 +437,13 @@ class UvChatApp:
         self.libre_url_var.set(self.config["translation"]["libretranslate_url"])
         self.libre_api_key_var.set(self.config["translation"].get("api_key", ""))
         self.google_api_key_var.set(self.config["translation"].get("google_api_key", ""))
+        self.oci_config_file_var.set(self.config["translation"].get("oci_config_file", ""))
+        self.oci_profile_var.set(self.config["translation"].get("oci_profile", "DEFAULT"))
+        self.oci_compartment_var.set(self.config["translation"].get("oci_compartment_id", ""))
+        self.window_tracking_var.set(self.config.get("window_tracking", {}).get("enabled", True))
+        self.window_title_var.set(
+            self.config.get("window_tracking", {}).get("title_hint", DEFAULT_WINDOW_TITLE_HINT)
+        )
         self._update_scan_buttons()
 
     def _read_ui_into_config(self):
@@ -324,6 +453,12 @@ class UvChatApp:
             "width": int(self.w_var.get() or "0"),
             "height": int(self.h_var.get() or "0"),
         }
+        self.config["tabs_capture"] = {
+            "x": int(self.tabs_x_var.get() or "0"),
+            "y": int(self.tabs_y_var.get() or "0"),
+            "width": int(self.tabs_w_var.get() or "0"),
+            "height": int(self.tabs_h_var.get() or "0"),
+        }
         self.config["poll_interval_ms"] = int(self.poll_var.get() or "1500")
         self.config["ocr_lang"] = self.ocr_lang_var.get().strip() or "eng"
         self.config["source_language"] = self.source_lang_var.get().strip() or "auto"
@@ -332,11 +467,182 @@ class UvChatApp:
         self.config["translation"]["libretranslate_url"] = self.libre_url_var.get().strip()
         self.config["translation"]["api_key"] = self.libre_api_key_var.get().strip()
         self.config["translation"]["google_api_key"] = self.google_api_key_var.get().strip()
+        self.config["translation"]["oci_config_file"] = self.oci_config_file_var.get().strip()
+        self.config["translation"]["oci_profile"] = self.oci_profile_var.get().strip() or "DEFAULT"
+        self.config["translation"]["oci_compartment_id"] = self.oci_compartment_var.get().strip()
+        self.config["window_tracking"]["enabled"] = bool(self.window_tracking_var.get())
+        self.config["window_tracking"]["title_hint"] = (
+            self.window_title_var.get().strip() or DEFAULT_WINDOW_TITLE_HINT
+        )
         self.config["window"]["always_on_top"] = bool(self.topmost_var.get())
+
+    def _screen_size(self):
+        width = self.root.winfo_screenwidth() or DEFAULT_SCREEN_WIDTH
+        height = self.root.winfo_screenheight() or DEFAULT_SCREEN_HEIGHT
+        return width, height
+
+    def _derive_tabs_capture(self, capture=None):
+        capture = capture or self.config["capture"]
+        screen_width, screen_height = self._screen_size()
+        x = max(0, min(int(capture["x"]), max(0, screen_width - 1)))
+        width = max(1, min(int(capture["width"]), max(1, screen_width - x)))
+        height = TABS_CAPTURE_HEIGHT
+        y = int(capture["y"]) + int(capture["height"]) - height
+        y = max(0, min(y, max(0, screen_height - height)))
+        return {"x": x, "y": y, "width": width, "height": height}
+
+    def sync_tabs_capture_from_chat(self):
+        tabs_capture = self._derive_tabs_capture(
+            {
+                "x": int(self.x_var.get() or "0"),
+                "y": int(self.y_var.get() or "0"),
+                "width": int(self.w_var.get() or "0"),
+                "height": int(self.h_var.get() or "0"),
+            }
+        )
+        self.tabs_x_var.set(str(tabs_capture["x"]))
+        self.tabs_y_var.set(str(tabs_capture["y"]))
+        self.tabs_w_var.set(str(tabs_capture["width"]))
+        self.tabs_h_var.set(str(tabs_capture["height"]))
+        self._set_status(
+            "Tabs region synced from chat region: "
+            f"x={tabs_capture['x']}, y={tabs_capture['y']}, "
+            f"width={tabs_capture['width']}, height={tabs_capture['height']}"
+        )
+
+    @staticmethod
+    def _rect_to_relative(rect, container):
+        width = max(1, int(container["width"]))
+        height = max(1, int(container["height"]))
+        return {
+            "x": round((int(rect["x"]) - int(container["left"])) / width, 6),
+            "y": round((int(rect["y"]) - int(container["top"])) / height, 6),
+            "width": round(int(rect["width"]) / width, 6),
+            "height": round(int(rect["height"]) / height, 6),
+        }
+
+    @staticmethod
+    def _relative_to_rect(relative, container):
+        width = max(1, int(container["width"]))
+        height = max(1, int(container["height"]))
+        return {
+            "x": int(round(int(container["left"]) + float(relative.get("x", 0.0)) * width)),
+            "y": int(round(int(container["top"]) + float(relative.get("y", 0.0)) * height)),
+            "width": max(1, int(round(float(relative.get("width", 1.0)) * width))),
+            "height": max(1, int(round(float(relative.get("height", 1.0)) * height))),
+        }
+
+    def _find_target_window_rect(self):
+        if os.name != "nt":
+            return None
+        hint = (
+            self.config.get("window_tracking", {}).get("title_hint", DEFAULT_WINDOW_TITLE_HINT)
+            or DEFAULT_WINDOW_TITLE_HINT
+        ).lower()
+        user32 = ctypes.windll.user32
+        windows = []
+        enum_proc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+
+        def callback(hwnd, _lparam):
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length <= 0:
+                return True
+            title_buffer = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, title_buffer, length + 1)
+            title = title_buffer.value.strip()
+            if not title or hint not in title.lower():
+                return True
+            rect = RECT()
+            if not user32.GetClientRect(hwnd, ctypes.byref(rect)):
+                return True
+            origin = POINT(rect.left, rect.top)
+            if not user32.ClientToScreen(hwnd, ctypes.byref(origin)):
+                return True
+            width = int(rect.right - rect.left)
+            height = int(rect.bottom - rect.top)
+            if width <= 0 or height <= 0:
+                return True
+            windows.append(
+                {
+                    "title": title,
+                    "left": int(origin.x),
+                    "top": int(origin.y),
+                    "width": width,
+                    "height": height,
+                }
+            )
+            return True
+
+        user32.EnumWindows(enum_proc(callback), 0)
+        if not windows:
+            return None
+        windows.sort(key=lambda item: -item["width"] * item["height"])
+        return windows[0]
+
+    def detect_window_from_ui(self):
+        self._read_ui_into_config()
+        window_rect = self._find_target_window_rect()
+        if not window_rect:
+            self.window_info_var.set("Window: not found")
+            self._set_status("Could not find a visible Utherverse window.")
+            return
+        self.window_info_var.set(
+            f"Window: {window_rect['title']} ({window_rect['left']},{window_rect['top']} {window_rect['width']}x{window_rect['height']})"
+        )
+        self._set_status("Utherverse window detected.")
+
+    def sync_offsets_from_current_region(self):
+        self._read_ui_into_config()
+        window_rect = self._find_target_window_rect()
+        if not window_rect:
+            self.window_info_var.set("Window: not found")
+            self._set_status("Could not find a visible Utherverse window for offset sync.")
+            return
+        self.config["window_tracking"]["chat_relative"] = self._rect_to_relative(
+            self.config["capture"], window_rect
+        )
+        self.config["window_tracking"]["tabs_relative"] = self._rect_to_relative(
+            self.config["tabs_capture"], window_rect
+        )
+        self.window_info_var.set(
+            f"Window: {window_rect['title']} ({window_rect['left']},{window_rect['top']} {window_rect['width']}x{window_rect['height']})"
+        )
+        self._set_status("Stored current chat and tabs regions as window-relative offsets.")
+
+    def _apply_window_tracking(self):
+        if not self.config.get("window_tracking", {}).get("enabled", True):
+            return self.config["capture"], self.config.get("tabs_capture", self._derive_tabs_capture())
+        window_rect = self._find_target_window_rect()
+        if not window_rect:
+            self.window_info_var.set("Window: not found")
+            return self.config["capture"], self.config.get("tabs_capture", self._derive_tabs_capture())
+        self.window_info_var.set(
+            f"Window: {window_rect['title']} ({window_rect['left']},{window_rect['top']} {window_rect['width']}x{window_rect['height']})"
+        )
+        capture = self._relative_to_rect(
+            self.config["window_tracking"].get("chat_relative", {}),
+            window_rect,
+        )
+        tabs_capture = self._relative_to_rect(
+            self.config["window_tracking"].get("tabs_relative", {}),
+            window_rect,
+        )
+        return capture, tabs_capture
 
     def save_current_config(self):
         try:
             self._read_ui_into_config()
+            if self.config.get("window_tracking", {}).get("enabled", True):
+                window_rect = self._find_target_window_rect()
+                if window_rect:
+                    self.config["window_tracking"]["chat_relative"] = self._rect_to_relative(
+                        self.config["capture"], window_rect
+                    )
+                    self.config["window_tracking"]["tabs_relative"] = self._rect_to_relative(
+                        self.config["tabs_capture"], window_rect
+                    )
             save_config(self.config)
             self._set_status(f"Saved config to {CONFIG_PATH}")
         except Exception as exc:
@@ -365,10 +671,16 @@ class UvChatApp:
             self.start_button.state(["disabled"])
             self.stop_button.state(["!disabled"])
             self.pick_region_button.state(["disabled"])
+            self.pick_tabs_region_button.state(["disabled"])
+            self.detect_window_button.state(["disabled"])
+            self.sync_offsets_button.state(["disabled"])
         else:
             self.start_button.state(["!disabled"])
             self.stop_button.state(["disabled"])
             self.pick_region_button.state(["!disabled"])
+            self.pick_tabs_region_button.state(["!disabled"])
+            self.detect_window_button.state(["!disabled"])
+            self.sync_offsets_button.state(["!disabled"])
 
     def save_debug_capture(self):
         if self.last_capture_image is None:
@@ -383,17 +695,24 @@ class UvChatApp:
         self.last_capture_image.save(raw_path)
         if self.last_processed_image is not None:
             self.last_processed_image.save(processed_path)
-            self._set_status(
-                f"Saved debug capture to {raw_path.name} and {processed_path.name}"
-            )
-            return
-
-        self._set_status(f"Saved debug capture to {raw_path.name}")
+        tabs_path = None
+        if self.last_tabs_capture_image is not None:
+            tabs_path = DEBUG_CAPTURE_DIR / f"capture-{timestamp}-tabs.png"
+            self.last_tabs_capture_image.save(tabs_path)
+        saved_names = [raw_path.name]
+        if self.last_processed_image is not None:
+            saved_names.append(processed_path.name)
+        if tabs_path is not None:
+            saved_names.append(tabs_path.name)
+        self._set_status(f"Saved debug capture to {', '.join(saved_names)}")
 
     def clear_chat(self):
         self.original_history_lines = []
         self.translated_history_lines = []
         self.seen_chat_lines = set()
+        self.chat_histories = {"LOCAL": {"original": [], "translated": [], "seen": set()}}
+        self.active_tab_name = "LOCAL"
+        self.active_tab_var.set("Active tab: LOCAL")
         self._set_scrolled_text(self.original_text, "")
         self._set_scrolled_text(self.translated_text, "")
         self._set_status("Cleared chat history.")
@@ -420,7 +739,7 @@ class UvChatApp:
         self._update_scan_buttons()
         self._set_status("Scanning stopped.")
 
-    def pick_region(self):
+    def pick_region(self, target="capture"):
         if self.is_running:
             self._set_status("Stop scanning before picking a new region.")
             return
@@ -457,6 +776,7 @@ class UvChatApp:
         self.region_picker_start = None
         self.region_picker_rect = None
         self.region_picker_origin = (left, top)
+        self.region_picker_target = target
 
         canvas.bind("<ButtonPress-1>", self._on_region_picker_press)
         canvas.bind("<B1-Motion>", self._on_region_picker_drag)
@@ -515,11 +835,23 @@ class UvChatApp:
             self._set_status("Region selection was too small.")
             return
 
-        self.x_var.set(str(left))
-        self.y_var.set(str(top))
-        self.w_var.set(str(width))
-        self.h_var.set(str(height))
-        self._set_status(f"Selected region: x={left}, y={top}, width={width}, height={height}")
+        if self.region_picker_target == "tabs_capture":
+            self.tabs_x_var.set(str(left))
+            self.tabs_y_var.set(str(top))
+            self.tabs_w_var.set(str(width))
+            self.tabs_h_var.set(str(height))
+            self._set_status(
+                f"Selected tabs region: x={left}, y={top}, width={width}, height={height}"
+            )
+        else:
+            self.x_var.set(str(left))
+            self.y_var.set(str(top))
+            self.w_var.set(str(width))
+            self.h_var.set(str(height))
+            self.sync_tabs_capture_from_chat()
+            self._set_status(
+                f"Selected chat region: x={left}, y={top}, width={width}, height={height}"
+            )
 
     def _cancel_region_picker(self, _event=None):
         self._close_region_picker()
@@ -532,6 +864,7 @@ class UvChatApp:
         self.region_picker_start = None
         self.region_picker_rect = None
         self.region_picker_origin = None
+        self.region_picker_target = "capture"
 
         if picker is not None and picker.winfo_exists():
             picker.destroy()
@@ -551,8 +884,15 @@ class UvChatApp:
 
     def _run_capture_cycle(self):
         try:
-            cleaned_text, raw_text, preview_image, processed_image = self._capture_and_ocr()
-            new_lines = self._extract_new_chat_lines(cleaned_text)
+            (
+                cleaned_text,
+                raw_text,
+                preview_image,
+                processed_image,
+                tabs_image,
+                active_tab_name,
+            ) = self._capture_and_ocr()
+            new_lines = self._extract_new_chat_lines(cleaned_text, active_tab_name)
             translated = self._translate_text("\n".join(new_lines)) if new_lines else ""
             self.root.after(
                 0,
@@ -562,6 +902,8 @@ class UvChatApp:
                     raw_text,
                     preview_image,
                     processed_image,
+                    tabs_image,
+                    active_tab_name,
                 ),
             )
         except Exception as exc:
@@ -581,7 +923,7 @@ class UvChatApp:
                 f"Could not import: {missing}\n"
                 "Install packages from requirements.txt plus system OCR packages.\n"
                 "Recommended: python3-tk, tesseract-ocr, pillow, mss, pytesseract."
-            ), "", None, None
+            ), "", None, None, None, self.active_tab_name
 
         tesseract_cmd = self._find_tesseract_cmd(self.config.get("tesseract_cmd", ""))
         if tesseract_cmd is None:
@@ -589,13 +931,13 @@ class UvChatApp:
                 "Tesseract OCR is not installed.\n\n"
                 "Install Tesseract OCR for Windows and try again.\n"
                 "Expected tesseract.exe in config.json, PATH, the local tools folder, or C:\\Program Files\\Tesseract-OCR."
-            ), "", None, None
+            ), "", None, None, None, self.active_tab_name
         pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
         tessdata_dir = Path(tesseract_cmd).resolve().parent / "tessdata"
         if tessdata_dir.exists():
             os.environ["TESSDATA_PREFIX"] = str(tessdata_dir)
 
-        capture = self.config["capture"]
+        capture, tabs_capture = self._apply_window_tracking()
         monitor = {
             "left": capture["x"],
             "top": capture["y"],
@@ -614,10 +956,37 @@ class UvChatApp:
             lang=self.config["ocr_lang"],
             config=f"--psm {self.config.get('ocr_psm', 6)}",
         )
+        tabs_image, active_tab_name = self._capture_active_tab(
+            ImageGrab, Image, ImageOps, mss, pytesseract, tabs_capture
+        )
         cleaned_text = self._cleanup_ocr_text(raw_text)
         if not raw_text.strip():
-            return "(no text detected)", "", image, processed
-        return cleaned_text, raw_text.strip(), image, processed
+            return "(no text detected)", "", image, processed, tabs_image, active_tab_name
+        return cleaned_text, raw_text.strip(), image, processed, tabs_image, active_tab_name
+
+    def _capture_active_tab(
+        self,
+        image_grab_module,
+        image_module,
+        image_ops_module,
+        mss_module,
+        pytesseract_module,
+        tabs_capture=None,
+    ):
+        tabs_capture = tabs_capture or self.config.get("tabs_capture", {})
+        if not tabs_capture or tabs_capture.get("width", 0) <= 0 or tabs_capture.get("height", 0) <= 0:
+            return None, self.active_tab_name
+        monitor = {
+            "left": tabs_capture["x"],
+            "top": tabs_capture["y"],
+            "width": tabs_capture["width"],
+            "height": tabs_capture["height"],
+        }
+        tabs_image = self._grab_capture_image(monitor, image_grab_module, image_module, mss_module)
+        active_tab_name = self._extract_active_tab_name(
+            tabs_image, image_module, image_ops_module, pytesseract_module
+        )
+        return tabs_image, active_tab_name
 
     def _grab_capture_image(self, monitor, image_grab_module, image_module, mss_module):
         backend = self.config.get("capture_backend", "auto").strip().lower() or "auto"
@@ -760,6 +1129,38 @@ class UvChatApp:
         return expanded.point(lambda px: 255 if px > 70 else 0, mode="1").convert("L")
 
     @staticmethod
+    def _prepare_tabs_image_for_ocr(image, image_ops_module, image_module):
+        grayscale = image.convert("L")
+        enlarged = grayscale.resize(
+            (grayscale.width * 3, grayscale.height * 3),
+            resample=image_module.Resampling.LANCZOS,
+        )
+        enlarged = image_ops_module.autocontrast(enlarged)
+        return enlarged.point(lambda px: 255 if px > 135 else 0, mode="1").convert("L")
+
+    @classmethod
+    def _extract_active_tab_name(cls, tabs_image, image_module, image_ops_module, pytesseract_module):
+        prepared = cls._prepare_tabs_image_for_ocr(tabs_image, image_ops_module, image_module)
+        raw_tabs_text = pytesseract_module.image_to_string(
+            prepared,
+            lang="eng",
+            config="--psm 7",
+        )
+        normalized = cls._normalize_tab_label(raw_tabs_text)
+        return normalized or "LOCAL"
+
+    @staticmethod
+    def _normalize_tab_label(raw_tabs_text):
+        normalized = re.sub(r"\s+", " ", raw_tabs_text or "").strip().upper()
+        normalized = normalized.replace("LOCAI", "LOCAL")
+        normalized = re.sub(r"[^A-Z0-9_ ]", "", normalized).strip()
+        if not normalized:
+            return ""
+        if normalized.startswith("LOCAL"):
+            return "LOCAL"
+        return normalized[:24]
+
+    @staticmethod
     def _find_tesseract_cmd(configured_path=""):
         if configured_path:
             candidate = Path(configured_path).expanduser()
@@ -865,7 +1266,7 @@ class UvChatApp:
             return True
         return False
 
-    def _extract_new_chat_lines(self, text):
+    def _extract_new_chat_lines(self, text, tab_name="LOCAL"):
         if (
             not text
             or text == "(no text detected)"
@@ -874,6 +1275,11 @@ class UvChatApp:
         ):
             return []
 
+        tab_state = self.chat_histories.setdefault(
+            tab_name or "LOCAL",
+            {"original": [], "translated": [], "seen": set()},
+        )
+        seen_lines = tab_state["seen"]
         new_lines = []
         for line in text.splitlines():
             normalized = line.strip()
@@ -886,9 +1292,9 @@ class UvChatApp:
                 continue
             if "your friend [" in lower:
                 continue
-            if normalized in self.seen_chat_lines:
+            if normalized in seen_lines:
                 continue
-            self.seen_chat_lines.add(normalized)
+            seen_lines.add(normalized)
             new_lines.append(normalized)
         return new_lines
 
@@ -964,6 +1370,65 @@ class UvChatApp:
             except Exception as exc:
                 return f"Translation error: {exc}"
 
+        if mode == "oci":
+            try:
+                import oci
+            except ImportError:
+                return "Translation error: install the oci Python package in the venv."
+
+            config_file = (
+                self.config["translation"].get("oci_config_file", "").strip()
+                or str(Path.home() / ".oci" / "config")
+            )
+            profile = self.config["translation"].get("oci_profile", "").strip() or "DEFAULT"
+            compartment_id = self.config["translation"].get("oci_compartment_id", "").strip()
+            if not compartment_id:
+                return "Translation error: missing OCI compartment OCID."
+
+            try:
+                oci_config = oci.config.from_file(config_file, profile)
+                client = oci.ai_language.AIServiceLanguageClient(oci_config)
+                models = oci.ai_language.models
+                source_language = self.config["source_language"].strip()
+                if source_language and source_language != "auto":
+                    detected_language = source_language.lower()
+                else:
+                    detect_response = client.batch_detect_dominant_language(
+                        models.BatchDetectDominantLanguageDetails(
+                            compartment_id=compartment_id,
+                            documents=[models.DominantLanguageDocument(key="detect", text=text)],
+                        )
+                    )
+                    detect_docs = getattr(detect_response.data, "documents", None) or []
+                    detected_languages = (
+                        getattr(detect_docs[0], "languages", None) if detect_docs else None
+                    ) or []
+                    detected_language = (
+                        getattr(detected_languages[0], "code", "") if detected_languages else ""
+                    ).lower()
+                if not detected_language:
+                    return "Translation error: OCI could not detect source language."
+
+                translation_response = client.batch_language_translation(
+                    models.BatchLanguageTranslationDetails(
+                        compartment_id=compartment_id,
+                        documents=[
+                            models.TextDocument(
+                                key="uvchat",
+                                text=text,
+                                language_code=detected_language,
+                            )
+                        ],
+                        target_language_code=self.config["target_language"].strip() or "de",
+                    )
+                )
+                documents = getattr(translation_response.data, "documents", None) or []
+                if not documents:
+                    return text
+                return getattr(documents[0], "translated_text", "") or text
+            except Exception as exc:
+                return f"Translation error: {exc}"
+
         return text
 
     def _update_texts(
@@ -973,12 +1438,24 @@ class UvChatApp:
         raw_text="",
         preview_image=None,
         processed_image=None,
+        tabs_image=None,
+        active_tab_name="LOCAL",
     ):
         self.last_capture_image = preview_image.copy() if preview_image is not None else None
         self.last_processed_image = (
             processed_image.copy() if processed_image is not None else None
         )
-        self._set_preview_images(preview_image, processed_image)
+        self.last_tabs_capture_image = tabs_image.copy() if tabs_image is not None else None
+        self.active_tab_name = active_tab_name or "LOCAL"
+        self.active_tab_var.set(f"Active tab: {self.active_tab_name}")
+        tab_state = self.chat_histories.setdefault(
+            self.active_tab_name,
+            {"original": [], "translated": [], "seen": set()},
+        )
+        self.original_history_lines = tab_state["original"]
+        self.translated_history_lines = tab_state["translated"]
+        self.seen_chat_lines = tab_state["seen"]
+        self._set_preview_images(preview_image, processed_image, tabs_image)
         if new_original_lines:
             self.original_history_lines.extend(new_original_lines)
             self._append_history_lines(
@@ -996,19 +1473,30 @@ class UvChatApp:
             self._set_status(f"Added {len(new_original_lines)} new chat line(s).")
         elif preview_image is not None:
             fallback_text = raw_text or "(no text detected)"
-            self._set_scrolled_text(self.original_text, fallback_text)
-            self._set_scrolled_text(self.translated_text, fallback_text)
-            self._set_status("No chat lines matched yet. Showing raw OCR output.")
+            if self.original_history_lines:
+                self._set_scrolled_text(
+                    self.original_text,
+                    "\n".join(self.original_history_lines),
+                )
+            else:
+                self._set_scrolled_text(self.original_text, fallback_text)
+            self._set_scrolled_text(
+                self.translated_text,
+                "\n".join(self.translated_history_lines),
+            )
+            self._set_status("No new chat lines matched yet. Original OCR updated only.")
 
-    def _set_preview_images(self, raw_image, processed_image):
+    def _set_preview_images(self, raw_image, processed_image, tabs_image=None):
         from PIL import ImageTk
 
         if raw_image is None:
             self.capture_preview_label.configure(text="No capture yet.")
             self.capture_preview_image = None
             self.processed_preview_image = None
+            self.tabs_preview_image = None
             self.capture_preview_image_label.configure(image="", text="No raw capture yet.")
             self.processed_preview_image_label.configure(image="", text="No OCR preview yet.")
+            self.tabs_preview_image_label.configure(image="", text="No tabs preview yet.")
             return
 
         self.capture_preview_label.configure(
@@ -1033,6 +1521,19 @@ class UvChatApp:
         self.processed_preview_image = ImageTk.PhotoImage(processed_preview)
         self.processed_preview_image_label.configure(
             image=self.processed_preview_image,
+            text="",
+        )
+
+        if tabs_image is None:
+            self.tabs_preview_image = None
+            self.tabs_preview_image_label.configure(image="", text="No tabs preview yet.")
+            return
+
+        tabs_preview = tabs_image.copy()
+        tabs_preview.thumbnail((440, 64))
+        self.tabs_preview_image = ImageTk.PhotoImage(tabs_preview)
+        self.tabs_preview_image_label.configure(
+            image=self.tabs_preview_image,
             text="",
         )
 
@@ -1081,3 +1582,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

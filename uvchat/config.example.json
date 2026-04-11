@@ -5,6 +5,12 @@
     "width": 600,
     "height": 300
   },
+  "tabs_capture": {
+    "x": 0,
+    "y": 272,
+    "width": 600,
+    "height": 28
+  },
   "capture_backend": "auto",
   "poll_interval_ms": 1500,
   "ocr_lang": "eng",
@@ -17,7 +23,27 @@
     "mode": "echo",
     "libretranslate_url": "http://127.0.0.1:5000/translate",
     "google_api_key": "",
+    "deepl_api_key": "",
+    "oci_config_file": "C:\\Users\\YOU\\.oci\\config",
+    "oci_profile": "DEFAULT",
+    "oci_compartment_id": "",
     "api_key": ""
+  },
+  "window_tracking": {
+    "enabled": true,
+    "title_hint": "Utherverse 3D Client",
+    "chat_relative": {
+      "x": 0.0,
+      "y": 0.0,
+      "width": 1.0,
+      "height": 1.0
+    },
+    "tabs_relative": {
+      "x": 0.0,
+      "y": 0.906667,
+      "width": 1.0,
+      "height": 0.0933
+    }
   },
   "window": {
     "always_on_top": false,
